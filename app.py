@@ -1,20 +1,19 @@
 import streamlit as st
 import requests
 import json
-import re
-from datetime import datetime
 import os
-from typing import Dict, List, Optional
+from datetime import datetime
+import time
 
-# Настройка страницы
+# Настройка страницы для мобильных устройств
 st.set_page_config(
-    page_title="Запрос на обслуживание",
-    page_icon="🔧",
+    page_title="AI Assistant Chat",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# CSS для мобильной версии
+# CSS для мобильной адаптивности
 st.markdown("""
 <style>
     .main .block-container {
@@ -23,11 +22,16 @@ st.markdown("""
         max-width: 100%;
     }
     
+    .stTextInput > div > div > input {
+        font-size: 16px; /* Предотвращает зум на iOS */
+    }
+    
     .chat-message {
         padding: 1rem;
         margin: 0.5rem 0;
         border-radius: 10px;
-        max-width: 80%;
+        max-width: 85%;
+        word-wrap: break-word;
     }
     
     .user-message {
@@ -38,404 +42,189 @@ st.markdown("""
     }
     
     .assistant-message {
-        background-color: #f8f9fa;
-        color: #333;
+        background-color: #f1f3f4;
+        color: black;
         margin-right: auto;
     }
     
-    .stTextInput > div > div > input {
-        font-size: 16px;
+    .chat-container {
+        height: 70vh;
+        overflow-y: auto;
+        padding: 1rem;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        margin-bottom: 1rem;
     }
     
     @media (max-width: 768px) {
         .main .block-container {
-            padding: 0.5rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        
+        .chat-message {
+            max-width: 90%;
         }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Инициализация session state
-if 'email' not in st.session_state:
-    st.session_state.email = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'service_request_data' not in st.session_state:
-    st.session_state.service_request_data = {
-        'equipment_type': None,
-        'device_number': None,
-        'problem_description': None,
-        'incident_date': None,
-        'photo_url': None
-    }
-if 'chat_active' not in st.session_state:
-    st.session_state.chat_active = False
+# Инициализация состояния сессии
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-def validate_email(email: str) -> bool:
-    """Валидация email адреса"""
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return re.match(pattern, email) is not None
+if "is_loading" not in st.session_state:
+    st.session_state.is_loading = False
 
-def send_to_n8n(message: str, user_email: str) -> Dict:
-    """Отправка сообщения в N8N для обработки LLM"""
-    webhook_url = os.getenv('N8N_WEBHOOK_URL')
+def send_to_n8n(message):
+    """Отправляет сообщение в n8n webhook"""
+    webhook_url = os.getenv("N8N_WEBHOOK_URL")
     
     if not webhook_url:
-        return {
-            'success': False,
-            'error': 'N8N_WEBHOOK_URL не настроен. Обратитесь к администратору.'
-        }
-    
-    payload = {
-        'message': message,
-        'user_email': user_email,
-        'timestamp': datetime.now().isoformat(),
-        'session_id': f"{user_email}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    }
+        st.error("N8N_WEBHOOK_URL не настроен. Пожалуйста, настройте переменную окружения.")
+        return None
     
     try:
+        payload = {
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+            "session_id": st.session_state.get("session_id", "default")
+        }
+        
         response = requests.post(
             webhook_url,
             json=payload,
-            timeout=30,
-            headers={
-                'Content-Type': 'application/json',
-                'User-Agent': 'ServiceRequestApp/1.0'
-            }
+            timeout=30
         )
         
         if response.status_code == 200:
-            try:
-                response_data = response.json()
-                return {
-                    'success': True,
-                    'data': response_data
-                }
-            except json.JSONDecodeError:
-                return {
-                    'success': False,
-                    'error': 'Некорректный ответ от сервера'
-                }
-        elif response.status_code == 404:
-            return {
-                'success': False,
-                'error': 'Сервис временно недоступен. Попробуйте позже.'
-            }
-        elif response.status_code == 500:
-            return {
-                'success': False,
-                'error': 'Внутренняя ошибка сервера. Попробуйте позже.'
-            }
+            return response.json()
         else:
-            return {
-                'success': False,
-                'error': f'Ошибка сервера: {response.status_code}'
-            }
+            st.error(f"Ошибка при отправке запроса: {response.status_code}")
+            return None
             
     except requests.exceptions.Timeout:
-        return {
-            'success': False,
-            'error': 'Превышено время ожидания. Проверьте подключение к интернету.'
-        }
-    except requests.exceptions.ConnectionError:
-        return {
-            'success': False,
-            'error': 'Ошибка подключения. Проверьте интернет-соединение.'
-        }
+        st.error("Превышено время ожидания ответа от сервера")
+        return None
     except requests.exceptions.RequestException as e:
-        return {
-            'success': False,
-            'error': f'Ошибка сети: {str(e)}'
-        }
+        st.error(f"Ошибка соединения: {str(e)}")
+        return None
     except Exception as e:
-        return {
-            'success': False,
-            'error': f'Неожиданная ошибка: {str(e)}'
-        }
+        st.error(f"Неожиданная ошибка: {str(e)}")
+        return None
 
-def extract_service_data(llm_response: str) -> Dict:
-    """Извлечение данных о заявке из ответа LLM"""
-    data = {
-        'equipment_type': None,
-        'device_number': None,
-        'problem_description': None,
-        'incident_date': None,
-        'photo_url': None
-    }
+def display_chat():
+    """Отображает историю чата"""
+    chat_container = st.container()
     
-    # Поиск типа оборудования
-    equipment_keywords = ['принтер', 'компьютер', 'сервер', 'роутер', 'монитор', 'сканер', 'факс', 'телефон']
-    for keyword in equipment_keywords:
-        if keyword.lower() in llm_response.lower():
-            data['equipment_type'] = keyword
-            break
-    
-    # Поиск номера устройства (серийный номер, инвентарный номер)
-    import re
-    device_patterns = [
-        r'номер[:\s]+([A-Z0-9-]+)',
-        r'серийный[:\s]+([A-Z0-9-]+)',
-        r'инвентарный[:\s]+([A-Z0-9-]+)',
-        r'устройство[:\s]+([A-Z0-9-]+)'
-    ]
-    
-    for pattern in device_patterns:
-        match = re.search(pattern, llm_response, re.IGNORECASE)
-        if match:
-            data['device_number'] = match.group(1)
-            break
-    
-    # Поиск описания проблемы
-    problem_keywords = ['не работает', 'сломан', 'ошибка', 'проблема', 'не включается', 'не печатает']
-    for keyword in problem_keywords:
-        if keyword.lower() in llm_response.lower():
-            # Извлекаем предложение с описанием проблемы
-            sentences = llm_response.split('.')
-            for sentence in sentences:
-                if keyword.lower() in sentence.lower():
-                    data['problem_description'] = sentence.strip()
-                    break
-            break
-    
-    # Поиск даты
-    date_patterns = [
-        r'(\d{1,2}[./]\d{1,2}[./]\d{2,4})',
-        r'(\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+\d{2,4})',
-        r'(сегодня|вчера|позавчера)'
-    ]
-    
-    for pattern in date_patterns:
-        match = re.search(pattern, llm_response, re.IGNORECASE)
-        if match:
-            data['incident_date'] = match.group(1)
-            break
-    
-    # Поиск URL фото
-    url_pattern = r'https?://[^\s]+\.(jpg|jpeg|png|gif|bmp)'
-    url_match = re.search(url_pattern, llm_response, re.IGNORECASE)
-    if url_match:
-        data['photo_url'] = url_match.group(0)
-    
-    return data
-
-def check_missing_data() -> List[str]:
-    """Проверка недостающих данных в заявке"""
-    missing = []
-    data = st.session_state.service_request_data
-    
-    if not data['equipment_type']:
-        missing.append('тип оборудования')
-    if not data['device_number']:
-        missing.append('номер устройства')
-    if not data['problem_description']:
-        missing.append('описание проблемы')
-    if not data['incident_date']:
-        missing.append('дата инцидента')
-    
-    return missing
-
-def generate_smart_question() -> str:
-    """Генерация умного вопроса на основе недостающих данных"""
-    missing = check_missing_data()
-    data = st.session_state.service_request_data
-    
-    if not data['equipment_type']:
-        return "Какой тип оборудования требует ремонта? (принтер, компьютер, сервер, роутер и т.д.)"
-    elif not data['device_number']:
-        return "Укажите номер или серийный номер устройства, если знаете."
-    elif not data['problem_description']:
-        return "Опишите подробно, в чем заключается проблема с оборудованием."
-    elif not data['incident_date']:
-        return "Когда произошла проблема? (дата или примерное время)"
-    else:
-        return "Есть ли у вас фотографии проблемы? Если да, приложите ссылку на изображение."
-
-def display_chat_message(message: str, is_user: bool = True):
-    """Отображение сообщения в чате"""
-    css_class = "user-message" if is_user else "assistant-message"
-    st.markdown(f'<div class="chat-message {css_class}">{message}</div>', unsafe_allow_html=True)
+    with chat_container:
+        for message in st.session_state.messages:
+            if message["role"] == "user":
+                st.markdown(f"""
+                <div class="chat-message user-message">
+                    <strong>Вы:</strong><br>
+                    {message["content"]}
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="chat-message assistant-message">
+                    <strong>Ассистент:</strong><br>
+                    {message["content"]}
+                </div>
+                """, unsafe_allow_html=True)
 
 def main():
-    st.title("🔧 Запрос на обслуживание")
+    # Заголовок приложения
+    st.title("🤖 AI Assistant Chat")
+    st.markdown("---")
     
-    # Проверка email
-    if not st.session_state.email:
-        st.markdown("### Введите ваш email для продолжения")
-        
-        email = st.text_input(
-            "Email:",
-            placeholder="example@company.com",
-            help="Введите корректный email адрес"
+    # Отображение истории чата
+    display_chat()
+    
+    # Индикатор загрузки
+    if st.session_state.is_loading:
+        with st.spinner("Ассистент печатает..."):
+            time.sleep(0.5)
+    
+    # Форма ввода сообщения
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_input(
+            "Введите ваше сообщение:",
+            placeholder="Напишите что-нибудь...",
+            key="user_input"
         )
         
-        if st.button("Продолжить", type="primary"):
-            if email and validate_email(email):
-                st.session_state.email = email
-                st.session_state.chat_active = True
-                st.rerun()
-            else:
-                st.error("Пожалуйста, введите корректный email адрес")
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            submit_button = st.form_submit_button("Отправить", use_container_width=True)
+        with col2:
+            clear_button = st.form_submit_button("Очистить чат", use_container_width=True)
     
-    else:
-        # Отображение email пользователя
-        st.success(f"Вы вошли как: {st.session_state.email}")
+    # Обработка отправки сообщения
+    if submit_button and user_input:
+        # Добавляем сообщение пользователя
+        st.session_state.messages.append({
+            "role": "user",
+            "content": user_input,
+            "timestamp": datetime.now()
+        })
         
-        if st.button("Выйти", type="secondary"):
-            st.session_state.email = None
-            st.session_state.chat_history = []
-            st.session_state.service_request_data = {
-                'equipment_type': None,
-                'device_number': None,
-                'problem_description': None,
-                'incident_date': None,
-                'photo_url': None
-            }
-            st.session_state.chat_active = False
-            st.rerun()
-        
-        # Чат интерфейс
-        if st.session_state.chat_active:
-            st.markdown("### Чат с ассистентом")
+        # Показываем индикатор загрузки
+        st.session_state.is_loading = True
+        st.rerun()
+    
+    # Обработка очистки чата
+    if clear_button:
+        st.session_state.messages = []
+        st.rerun()
+    
+    # Обработка запроса к n8n (если есть новое сообщение пользователя)
+    if st.session_state.messages and st.session_state.is_loading:
+        last_message = st.session_state.messages[-1]
+        if last_message["role"] == "user":
+            # Отправляем запрос в n8n
+            response = send_to_n8n(last_message["content"])
             
-            # Отображение истории чата
-            for message in st.session_state.chat_history:
-                display_chat_message(message['content'], message['is_user'])
-            
-            # Проверка завершенности сбора данных
-            missing_data = check_missing_data()
-            total_fields = 4  # equipment_type, device_number, problem_description, incident_date
-            completed_fields = total_fields - len(missing_data)
-            progress = completed_fields / total_fields
-            
-            # Индикатор прогресса
-            st.progress(progress)
-            st.caption(f"Прогресс: {completed_fields}/{total_fields} полей заполнено")
-            
-            if missing_data:
-                st.info(f"Необходимо собрать дополнительную информацию: {', '.join(missing_data)}")
+            if response:
+                # Извлекаем ответ ассистента из ответа n8n
+                assistant_response = response.get("response", "Извините, не удалось получить ответ.")
             else:
-                st.success("✅ Все необходимые данные собраны!")
-                
-                # Отображение итогового запроса
-                st.markdown("### Итоговый запрос на обслуживание")
-                
-                data = st.session_state.service_request_data
-                request_summary = f"""
-**Тип оборудования:** {data['equipment_type']}
-**Номер устройства:** {data['device_number']}
-**Описание проблемы:** {data['problem_description']}
-**Дата инцидента:** {data['incident_date']}
-"""
-                if data['photo_url']:
-                    request_summary += f"**Фото:** {data['photo_url']}\n"
-                
-                st.markdown(request_summary)
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Отправить заявку", type="primary"):
-                        # Отправка итогового запроса
-                        final_request = {
-                            'user_email': st.session_state.email,
-                            'equipment_type': data['equipment_type'],
-                            'device_number': data['device_number'],
-                            'problem_description': data['problem_description'],
-                            'incident_date': data['incident_date'],
-                            'photo_url': data['photo_url'],
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        
-                        result = send_to_n8n(json.dumps(final_request), st.session_state.email)
-                        
-                        if result['success']:
-                            st.success("✅ Заявка успешно отправлена!")
-                            st.balloons()
-                            
-                            # Очистка данных после успешной отправки
-                            st.session_state.chat_history = []
-                            st.session_state.service_request_data = {
-                                'equipment_type': None,
-                                'device_number': None,
-                                'problem_description': None,
-                                'incident_date': None,
-                                'photo_url': None
-                            }
-                            
-                            # Показать кнопку для новой заявки
-                            if st.button("Создать новую заявку", type="primary"):
-                                st.rerun()
-                        else:
-                            st.error(f"❌ Ошибка отправки: {result['error']}")
-                            st.info("Попробуйте еще раз или обратитесь к администратору.")
-                
-                with col2:
-                    if st.button("Редактировать данные"):
-                        st.session_state.service_request_data = {
-                            'equipment_type': None,
-                            'device_number': None,
-                            'problem_description': None,
-                            'incident_date': None,
-                            'photo_url': None
-                        }
-                        st.rerun()
+                assistant_response = "Извините, произошла ошибка при обработке вашего запроса."
             
-            # Поле ввода сообщения
-            user_message = st.text_input(
-                "Введите ваше сообщение:",
-                placeholder="Опишите проблему...",
-                key="user_input"
-            )
+            # Добавляем ответ ассистента
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": assistant_response,
+                "timestamp": datetime.now()
+            })
             
-            if st.button("Отправить", type="primary") and user_message:
-                # Добавление сообщения пользователя в историю
-                st.session_state.chat_history.append({
-                    'content': user_message,
-                    'is_user': True
-                })
-                
-                # Отправка в N8N
-                with st.spinner("Обработка запроса..."):
-                    result = send_to_n8n(user_message, st.session_state.email)
-                    
-                    if result['success']:
-                        # Получение ответа от LLM
-                        llm_response = result['data'].get('response', 'Извините, не удалось обработать запрос.')
-                        
-                        # Обновление данных заявки из ответа пользователя
-                        extracted_data = extract_service_data(user_message)
-                        for key, value in extracted_data.items():
-                            if value:
-                                st.session_state.service_request_data[key] = value
-                        
-                        # Проверяем, нужны ли дополнительные вопросы
-                        missing_data = check_missing_data()
-                        if missing_data:
-                            # Генерируем умный вопрос
-                            smart_question = generate_smart_question()
-                            assistant_response = f"{llm_response}\n\n{smart_question}"
-                        else:
-                            assistant_response = f"{llm_response}\n\n✅ Отлично! Я собрал всю необходимую информацию. Теперь можно сформировать заявку на обслуживание."
-                        
-                        # Добавление ответа ассистента в историю
-                        st.session_state.chat_history.append({
-                            'content': assistant_response,
-                            'is_user': False
-                        })
-                        
-                        st.rerun()
-                    else:
-                        st.error(f"Ошибка: {result['error']}")
-            
-            # Показываем подсказки для пользователя
-            if not st.session_state.chat_history:
-                st.markdown("""
-                **💡 Подсказка:** Опишите проблему с оборудованием. Ассистент поможет собрать всю необходимую информацию:
-                - Тип оборудования (принтер, компьютер, сервер и т.д.)
-                - Номер или серийный номер устройства
-                - Подробное описание проблемы
-                - Дата возникновения проблемы
-                - Фото проблемы (если есть)
-                """)
+            # Убираем индикатор загрузки
+            st.session_state.is_loading = False
+            st.rerun()
+
+    # Информация о настройке
+    with st.expander("ℹ️ Информация о настройке"):
+        st.markdown("""
+        **Для работы приложения необходимо настроить переменную окружения:**
+        - `N8N_WEBHOOK_URL` - URL webhook'а вашего n8n workflow
+        
+        **Формат данных, отправляемых в n8n:**
+        ```json
+        {
+            "message": "текст сообщения пользователя",
+            "timestamp": "2024-01-01T12:00:00",
+            "session_id": "идентификатор сессии"
+        }
+        ```
+        
+        **Ожидаемый формат ответа от n8n:**
+        ```json
+        {
+            "response": "ответ ассистента"
+        }
+        ```
+        """)
 
 if __name__ == "__main__":
     main()

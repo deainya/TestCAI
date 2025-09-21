@@ -79,12 +79,6 @@ def send_to_n8n(message, chat_history, problem_data):
         "problem_data": problem_data
     }
     
-    # Логирование отправляемых данных
-    print("=== ОТПРАВКА В N8N ===")
-    print(f"URL: {webhook_url}")
-    print(f"Payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
-    print("====================")
-    
     try:
         response = requests.post(
             webhook_url,
@@ -92,7 +86,6 @@ def send_to_n8n(message, chat_history, problem_data):
             timeout=30,
             headers={'Content-Type': 'application/json'}
         )
-        
         
         if response.status_code == 200:
             response_data = response.json()
@@ -112,7 +105,8 @@ def send_to_n8n(message, chat_history, problem_data):
             elif isinstance(response_data, dict):
                 # Если ответ - объект
                 return {
-                    "response": response_data.get("response", "Извините, не удалось получить ответ."),
+                    # "response": response_data.get("response", "Извините, не удалось получить ответ."),
+                    "response": json.dumps(response_data, ensure_ascii=False, indent=2)
                     "problem_data": response_data.get("problem_data", {})
                 }
             else:

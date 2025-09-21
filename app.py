@@ -79,6 +79,12 @@ def send_to_n8n(message, chat_history, problem_data):
         "problem_data": problem_data
     }
     
+    # Логирование отправляемых данных
+    print("=== ОТПРАВКА В N8N ===")
+    print(f"URL: {webhook_url}")
+    print(f"Payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+    print("====================")
+    
     try:
         response = requests.post(
             webhook_url,
@@ -87,8 +93,35 @@ def send_to_n8n(message, chat_history, problem_data):
             headers={'Content-Type': 'application/json'}
         )
         
+        # Логирование ответа
+        print("=== ОТВЕТ ОТ N8N ===")
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text}")
+        print("===================")
+        
         if response.status_code == 200:
-            return response.json()
+            response_data = response.json()
+            
+            # Парсинг ответа в зависимости от структуры
+            if isinstance(response_data, list) and len(response_data) > 0:
+                # Если ответ - массив (как в примере)
+                first_item = response_data[0]
+                if 'message' in first_item and 'content' in first_item['message']:
+                    content = first_item['message']['content']
+                    return {
+                        "response": content.get("response", "Извините, не удалось получить ответ."),
+                        "problem_data": content.get("problem_data", {})
+                    }
+                else:
+                    return {"error": "Неожиданная структура ответа от n8n"}
+            elif isinstance(response_data, dict):
+                # Если ответ - объект
+                return {
+                    "response": response_data.get("response", "Извините, не удалось получить ответ."),
+                    "problem_data": response_data.get("problem_data", {})
+                }
+            else:
+                return {"error": "Неожиданный формат ответа от n8n"}
         else:
             return {"error": f"Ошибка сервера: {response.status_code}"}
             
@@ -246,6 +279,11 @@ def main():
                             st.session_state.problem_data
                         )
                     
+                    # Логирование результата обработки
+                    print("=== ОБРАБОТКА ОТВЕТА ===")
+                    print(f"Response: {response}")
+                    print("=====================")
+                    
                     if "error" in response:
                         st.error(f"❌ {response['error']}")
                         # Добавляем сообщение об ошибке
@@ -264,6 +302,7 @@ def main():
                         # Обновляем данные о проблеме
                         if "problem_data" in response:
                             st.session_state.problem_data.update(response["problem_data"])
+                            print(f"Обновленные problem_data: {st.session_state.problem_data}")
                     
                     st.rerun()
         

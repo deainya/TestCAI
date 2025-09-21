@@ -106,7 +106,7 @@ def send_to_n8n(message, chat_history, problem_data):
                 # Если ответ - объект
                 return {
                     # "response": response_data.get("response", "Извините, не удалось получить ответ."),
-                    "response": json.dumps(response_data, ensure_ascii=False, indent=2)
+                    "response": json.dumps(response_data, ensure_ascii=False, indent=2),
                     "problem_data": response_data.get("problem_data", {})
                 }
             else:

@@ -3,8 +3,7 @@ import requests
 import json
 import re
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-import time
+import os
 
 # Настройка страницы
 st.set_page_config(
@@ -30,7 +29,8 @@ st.markdown("""
         border-radius: 10px 10px 0 10px;
         margin: 5px 0;
         text-align: right;
-        margin-left: 20%;
+        max-width: 80%;
+        margin-left: auto;
     }
     
     .assistant-message {
@@ -39,8 +39,7 @@ st.markdown("""
         padding: 10px;
         border-radius: 10px 10px 10px 0;
         margin: 5px 0;
-        text-align: left;
-        margin-right: 20%;
+        max-width: 80%;
     }
     
     .chat-input {
@@ -54,50 +53,33 @@ st.markdown("""
         z-index: 1000;
     }
     
-    .main-container {
-        padding-bottom: 100px;
-    }
-    
     @media (max-width: 768px) {
-        .chat-container {
-            padding: 5px;
-        }
-        
-        .user-message {
-            margin-left: 10%;
-        }
-        
-        .assistant-message {
-            margin-right: 10%;
+        .main .block-container {
+            padding: 1rem;
         }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Функция валидации email
-def validate_email(email: str) -> bool:
+def validate_email(email):
+    """Валидация email адреса"""
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
-# Функция для отправки запроса в n8n
-def send_to_n8n(message: str, chat_history: List[Dict], problem_data: Dict) -> Dict:
-    """
-    Отправляет запрос в n8n и возвращает ответ
-    """
+def send_to_n8n(message, chat_history, problem_data):
+    """Отправка запроса в n8n"""
+    webhook_url = os.getenv('N8N_WEBHOOK_URL')
+    
+    if not webhook_url:
+        return {"error": "N8N_WEBHOOK_URL не настроен"}
+    
+    payload = {
+        "message": message,
+        "chat_history": chat_history,
+        "problem_data": problem_data
+    }
+    
     try:
-        webhook_url = st.secrets.get("N8N_WEBHOOK_URL")
-        if not webhook_url:
-            return {
-                "success": False,
-                "error": "N8N_WEBHOOK_URL не настроен"
-            }
-        
-        payload = {
-            "message": message,
-            "chat_history": chat_history,
-            "problem_data": problem_data
-        }
-        
         response = requests.post(
             webhook_url,
             json=payload,
@@ -106,84 +88,187 @@ def send_to_n8n(message: str, chat_history: List[Dict], problem_data: Dict) -> D
         )
         
         if response.status_code == 200:
-            return {
-                "success": True,
-                "data": response.json()
-            }
+            return response.json()
         else:
-            return {
-                "success": False,
-                "error": f"Ошибка сервера: {response.status_code}"
-            }
+            return {"error": f"Ошибка сервера: {response.status_code}"}
             
     except requests.exceptions.Timeout:
-        return {
-            "success": False,
-            "error": "Таймаут запроса к n8n"
-        }
+        return {"error": "Таймаут запроса"}
     except requests.exceptions.ConnectionError:
-        return {
-            "success": False,
-            "error": "Ошибка подключения к n8n"
-        }
+        return {"error": "Ошибка подключения"}
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"Неожиданная ошибка: {str(e)}"
+        return {"error": f"Неожиданная ошибка: {str(e)}"}
+
+def initialize_session_state():
+    """Инициализация состояния сессии"""
+    if 'email' not in st.session_state:
+        st.session_state.email = None
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if 'problem_data' not in st.session_state:
+        st.session_state.problem_data = {
+            "equipment_type": "",
+            "device_number": "",
+            "description": "",
+            "incident_date": "",
+            "photo_url": ""
         }
+    if 'show_final_form' not in st.session_state:
+        st.session_state.show_final_form = False
 
-# Функция для отображения сообщений чата
-def display_chat_message(content: str, is_user: bool):
-    if is_user:
-        st.markdown(f'<div class="user-message">{content}</div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="assistant-message">{content}</div>', unsafe_allow_html=True)
+def display_chat():
+    """Отображение чата"""
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    
+    for message in st.session_state.chat_history:
+        if message['is_user']:
+            st.markdown(f'<div class="user-message">{message["content"]}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="assistant-message">{message["content"]}</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# Функция для проверки полноты данных о проблеме
-def is_problem_data_complete(problem_data: Dict) -> bool:
-    required_fields = ["equipment_type", "device_number", "description", "incident_date"]
-    return all(problem_data.get(field) for field in required_fields)
+def display_final_form():
+    """Отображение итоговой формы"""
+    st.subheader("📋 Итоговый запрос на обслуживание")
+    
+    with st.form("final_request"):
+        st.write("**Проверьте данные перед отправкой:**")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            equipment_type = st.text_input(
+                "Тип оборудования",
+                value=st.session_state.problem_data.get("equipment_type", ""),
+                disabled=True
+            )
+            device_number = st.text_input(
+                "Номер устройства",
+                value=st.session_state.problem_data.get("device_number", ""),
+                disabled=True
+            )
+        
+        with col2:
+            incident_date = st.text_input(
+                "Дата инцидента",
+                value=st.session_state.problem_data.get("incident_date", ""),
+                disabled=True
+            )
+            photo_url = st.text_input(
+                "URL фото (опционально)",
+                value=st.session_state.problem_data.get("photo_url", ""),
+                disabled=True
+            )
+        
+        description = st.text_area(
+            "Описание проблемы",
+            value=st.session_state.problem_data.get("description", ""),
+            disabled=True,
+            height=100
+        )
+        
+        submitted = st.form_submit_button("✅ Отправить запрос", type="primary")
+        
+        if submitted:
+            # Здесь можно добавить логику отправки итогового запроса
+            st.success("✅ Запрос на обслуживание успешно отправлен!")
+            st.balloons()
+            
+            # Очистка данных после отправки
+            st.session_state.chat_history = []
+            st.session_state.problem_data = {
+                "equipment_type": "",
+                "device_number": "",
+                "description": "",
+                "incident_date": "",
+                "photo_url": ""
+            }
+            st.session_state.show_final_form = False
+            st.rerun()
 
-# Инициализация session state
-if 'email' not in st.session_state:
-    st.session_state.email = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'problem_data' not in st.session_state:
-    st.session_state.problem_data = {
-        "equipment_type": "",
-        "device_number": "",
-        "description": "",
-        "incident_date": "",
-        "photo_url": ""
-    }
-if 'show_final_form' not in st.session_state:
-    st.session_state.show_final_form = False
-
-# Главный интерфейс
 def main():
+    """Основная функция приложения"""
+    initialize_session_state()
+    
     st.title("🔧 Запрос на обслуживание")
+    st.markdown("---")
     
     # Проверка email
     if not st.session_state.email:
-        st.markdown("### Введите ваш email для продолжения")
-        email = st.text_input("Email:", placeholder="example@company.com")
+        st.subheader("📧 Введите ваш email")
+        email = st.text_input("Email", placeholder="example@company.com")
         
-        if st.button("Продолжить"):
+        if st.button("Продолжить", type="primary"):
             if validate_email(email):
                 st.session_state.email = email
+                st.success("✅ Email подтвержден!")
                 st.rerun()
             else:
-                st.error("Пожалуйста, введите корректный email адрес")
+                st.error("❌ Пожалуйста, введите корректный email адрес")
+    else:
+        # Отображение email пользователя
+        st.info(f"👤 Пользователь: {st.session_state.email}")
         
-        return
-    
-    # Отображение email пользователя
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.info(f"Вы вошли как: {st.session_state.email}")
-    with col2:
-        if st.button("Сменить email"):
+        # Проверка готовности данных для итоговой формы
+        required_fields = ["equipment_type", "device_number", "description", "incident_date"]
+        all_required_filled = all(st.session_state.problem_data.get(field) for field in required_fields)
+        
+        if all_required_filled and not st.session_state.show_final_form:
+            if st.button("📋 Показать итоговый запрос", type="primary"):
+                st.session_state.show_final_form = True
+                st.rerun()
+        
+        if st.session_state.show_final_form:
+            display_final_form()
+        else:
+            # Чат интерфейс
+            st.subheader("💬 Чат с ассистентом")
+            display_chat()
+            
+            # Ввод сообщения
+            with st.form("chat_form", clear_on_submit=True):
+                user_message = st.text_input("Введите ваше сообщение:", placeholder="Опишите проблему...")
+                submitted = st.form_submit_button("Отправить", type="primary")
+                
+                if submitted and user_message:
+                    # Добавляем сообщение пользователя в историю
+                    st.session_state.chat_history.append({
+                        "content": user_message,
+                        "is_user": True
+                    })
+                    
+                    # Отправляем запрос в n8n
+                    with st.spinner("Ассистент печатает..."):
+                        response = send_to_n8n(
+                            user_message,
+                            st.session_state.chat_history,
+                            st.session_state.problem_data
+                        )
+                    
+                    if "error" in response:
+                        st.error(f"❌ {response['error']}")
+                        # Добавляем сообщение об ошибке
+                        st.session_state.chat_history.append({
+                            "content": f"Извините, произошла ошибка: {response['error']}",
+                            "is_user": False
+                        })
+                    else:
+                        # Добавляем ответ ассистента
+                        assistant_response = response.get("response", "Извините, не удалось получить ответ.")
+                        st.session_state.chat_history.append({
+                            "content": assistant_response,
+                            "is_user": False
+                        })
+                        
+                        # Обновляем данные о проблеме
+                        if "problem_data" in response:
+                            st.session_state.problem_data.update(response["problem_data"])
+                    
+                    st.rerun()
+        
+        # Кнопка сброса
+        if st.button("🔄 Начать заново"):
             st.session_state.email = None
             st.session_state.chat_history = []
             st.session_state.problem_data = {
@@ -194,148 +279,6 @@ def main():
                 "photo_url": ""
             }
             st.session_state.show_final_form = False
-            st.rerun()
-    
-    # Если данные о проблеме собраны, показываем итоговую форму
-    if is_problem_data_complete(st.session_state.problem_data) and not st.session_state.show_final_form:
-        st.session_state.show_final_form = True
-    
-    if st.session_state.show_final_form:
-        display_final_form()
-    else:
-        display_chat_interface()
-
-def display_final_form():
-    """Отображение итоговой формы запроса на обслуживание"""
-    st.markdown("### 📋 Итоговый запрос на обслуживание")
-    
-    st.markdown("**Проверьте данные перед отправкой:**")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown(f"**Тип оборудования:** {st.session_state.problem_data['equipment_type']}")
-        st.markdown(f"**Номер устройства:** {st.session_state.problem_data['device_number']}")
-    
-    with col2:
-        st.markdown(f"**Дата инцидента:** {st.session_state.problem_data['incident_date']}")
-        if st.session_state.problem_data['photo_url']:
-            st.markdown(f"**Фото:** {st.session_state.problem_data['photo_url']}")
-    
-    st.markdown(f"**Описание проблемы:** {st.session_state.problem_data['description']}")
-    
-    st.markdown("---")
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
-    
-    with col1:
-        if st.button("✅ Подтвердить и отправить", type="primary"):
-            # Здесь можно добавить логику отправки итогового запроса
-            st.success("Запрос на обслуживание успешно отправлен!")
-            st.balloons()
-            
-            # Сброс данных
-            st.session_state.chat_history = []
-            st.session_state.problem_data = {
-                "equipment_type": "",
-                "device_number": "",
-                "description": "",
-                "incident_date": "",
-                "photo_url": ""
-            }
-            st.session_state.show_final_form = False
-            st.rerun()
-    
-    with col2:
-        if st.button("✏️ Редактировать"):
-            st.session_state.show_final_form = False
-            st.rerun()
-    
-    with col3:
-        if st.button("🔄 Начать заново"):
-            st.session_state.chat_history = []
-            st.session_state.problem_data = {
-                "equipment_type": "",
-                "device_number": "",
-                "description": "",
-                "incident_date": "",
-                "photo_url": ""
-            }
-            st.session_state.show_final_form = False
-            st.rerun()
-
-def display_chat_interface():
-    """Отображение чат-интерфейса"""
-    st.markdown("### 💬 Чат с ассистентом")
-    st.markdown("Опишите вашу проблему, и я помогу собрать всю необходимую информацию.")
-    
-    # Отображение истории чата
-    if st.session_state.chat_history:
-        st.markdown('<div class="main-container">', unsafe_allow_html=True)
-        for message in st.session_state.chat_history:
-            display_chat_message(message['content'], message['is_user'])
-        st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        # Первое сообщение от ассистента
-        if not st.session_state.chat_history:
-            initial_message = "Добрый день! Чем могу помочь? Опишите, пожалуйста, проблему с оборудованием."
-            st.session_state.chat_history.append({
-                "content": initial_message,
-                "is_user": False
-            })
-            display_chat_message(initial_message, False)
-    
-    # Ввод сообщения
-    st.markdown("---")
-    user_message = st.text_input("Введите ваше сообщение:", placeholder="Опишите проблему...")
-    
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        if st.button("Отправить", type="primary"):
-            if user_message.strip():
-                # Добавляем сообщение пользователя в историю
-                st.session_state.chat_history.append({
-                    "content": user_message,
-                    "is_user": True
-                })
-                
-                # Отправляем запрос в n8n
-                with st.spinner("Обрабатываю ваш запрос..."):
-                    result = send_to_n8n(
-                        user_message,
-                        st.session_state.chat_history,
-                        st.session_state.problem_data
-                    )
-                
-                if result["success"]:
-                    response_data = result["data"]
-                    assistant_response = response_data.get("response", "Извините, произошла ошибка при обработке запроса.")
-                    
-                    # Обновляем данные о проблеме
-                    if "problem_data" in response_data:
-                        st.session_state.problem_data.update(response_data["problem_data"])
-                    
-                    # Добавляем ответ ассистента в историю
-                    st.session_state.chat_history.append({
-                        "content": assistant_response,
-                        "is_user": False
-                    })
-                    
-                    st.rerun()
-                else:
-                    st.error(f"Ошибка: {result['error']}")
-    
-    with col2:
-        if st.button("🔄 Очистить чат"):
-            st.session_state.chat_history = []
-            st.session_state.problem_data = {
-                "equipment_type": "",
-                "device_number": "",
-                "description": "",
-                "incident_date": "",
-                "photo_url": ""
-            }
             st.rerun()
 
 if __name__ == "__main__":

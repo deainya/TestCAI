@@ -293,7 +293,7 @@ def main():
                         })
                     else:
                         # Добавляем ответ ассистента
-                        assistant_response = response.get("response", "Извините, не удалось получить ответ.")
+                        assistant_response = response.get("content", "Извините, не удалось получить ответ.")
                         st.session_state.chat_history.append({
                             "content": assistant_response,
                             "is_user": False

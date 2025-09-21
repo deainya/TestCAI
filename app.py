@@ -93,11 +93,6 @@ def send_to_n8n(message, chat_history, problem_data):
             headers={'Content-Type': 'application/json'}
         )
         
-        # Логирование ответа
-        print("=== ОТВЕТ ОТ N8N ===")
-        print(f"Status Code: {response.status_code}")
-        print(f"Response: {response.text}")
-        print("===================")
         
         if response.status_code == 200:
             response_data = response.json()
@@ -279,11 +274,6 @@ def main():
                             st.session_state.problem_data
                         )
                     
-                    # Логирование результата обработки
-                    print("=== ОБРАБОТКА ОТВЕТА ===")
-                    print(f"Response: {response}")
-                    print("=====================")
-                    
                     if "error" in response:
                         st.error(f"❌ {response['error']}")
                         # Добавляем сообщение об ошибке
@@ -292,8 +282,8 @@ def main():
                             "is_user": False
                         })
                     else:
-                        # Добавляем ответ ассистента
-                        assistant_response = response.get("content", "Извините, не удалось получить ответ.")
+                        # Добавляем весь JSON ответ от n8n
+                        assistant_response = json.dumps(response, ensure_ascii=False, indent=2)
                         st.session_state.chat_history.append({
                             "content": assistant_response,
                             "is_user": False

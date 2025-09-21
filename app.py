@@ -238,7 +238,7 @@ def main():
                 st.session_state.problem_data.update(n8n_response['problem_data'])
             
             # Добавляем ответ ассистента в историю
-            assistant_response = n8n_response.get('text', 'Извините, произошла ошибка при обработке запроса.')
+            assistant_response = n8n_response.get('response', 'Извините, произошла ошибка при обработке запроса.')
             st.session_state.chat_history.append({
                 'content': assistant_response,
                 'is_user': False

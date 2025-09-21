@@ -88,29 +88,7 @@ def send_to_n8n(message, chat_history, problem_data):
         )
         
         if response.status_code == 200:
-            response_data = response.json()
-            
-            # Парсинг ответа в зависимости от структуры
-            if isinstance(response_data, list) and len(response_data) > 0:
-                # Если ответ - массив (как в примере)
-                first_item = response_data[0]
-                if 'message' in first_item and 'content' in first_item['message']:
-                    content = first_item['message']['content']
-                    return {
-                        "response": content.get("response", "Извините, не удалось получить ответ."),
-                        "problem_data": content.get("problem_data", {})
-                    }
-                else:
-                    return {"error": "Неожиданная структура ответа от n8n"}
-            elif isinstance(response_data, dict):
-                # Если ответ - объект
-                return {
-                    # "response": response_data.get("response", "Извините, не удалось получить ответ."),
-                    "response": json.dumps(response_data, ensure_ascii=False, indent=2),
-                    "problem_data": response_data.get("problem_data", {})
-                }
-            else:
-                return {"error": "Неожиданный формат ответа от n8n"}
+            return response.json()
         else:
             return {"error": f"Ошибка сервера: {response.status_code}"}
             
@@ -276,8 +254,8 @@ def main():
                             "is_user": False
                         })
                     else:
-                        # Добавляем весь JSON ответ от n8n
-                        assistant_response = json.dumps(response, ensure_ascii=False, indent=2)
+                        # Добавляем ответ ассистента
+                        assistant_response = response.get("response", "Извините, не удалось получить ответ.")
                         st.session_state.chat_history.append({
                             "content": assistant_response,
                             "is_user": False
@@ -286,7 +264,6 @@ def main():
                         # Обновляем данные о проблеме
                         if "problem_data" in response:
                             st.session_state.problem_data.update(response["problem_data"])
-                            print(f"Обновленные problem_data: {st.session_state.problem_data}")
                     
                     st.rerun()
         
